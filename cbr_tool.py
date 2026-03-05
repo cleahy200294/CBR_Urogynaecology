@@ -105,27 +105,28 @@ def append_case_to_csv(new_case: dict):
 
 
 # ── Feature table ──────────────────────────────────────────────────────────────
-# (feature, max_value, weight)
-# max_value normalises each feature to 0–1 so age doesn't dominate over binary symptoms.
-# weight controls how much a difference in that feature affects the similarity score.
-# Increase a weight to make that feature more influential; decrease to reduce it.
+# (feature, max_value, SUI weight, Detrusor weight)
+# Two separate weight columns allow the KNN to be tuned independently for
+# SUI diagnosis vs detrusor diagnosis — run twice, shown in separate tabs.
+# SUI weights favour anatomical features; detrusor weights favour OAB symptoms.
 FEATURES = [
-    ("age",        100,  1.0),
-    ("sui",          1,  1.5),
-    ("urgency",      1,  1.5),
-    ("frequency",    1,  1.0),
-    ("nocturia",    10,  1.0),
-    ("leaking",      1,  1.0),
-    ("pessary",      1,  0.5),
-    ("caffeine",     5,  0.5),
-    ("qmax",         2,  1.5),
-    ("leukocytes",   4,  1.0),
-    ("protein",      4,  1.0),
-    ("blood",        4,  1.0),
-    ("cystocele",    4,  1.5),
-    ("rectocele",    4,  1.5),
-    ("uvd",          3,  1.0),
-    ("pfc",          5,  1.0),
+    # feature       max   SUI   DET
+    ("age",         100,  1.0,  1.0),
+    ("sui",           1,  2.5,  0.5),   # strong SUI predictor
+    ("urgency",       1,  0.5,  2.5),   # strong detrusor predictor
+    ("frequency",     1,  0.5,  2.0),
+    ("nocturia",     10,  0.5,  1.5),
+    ("leaking",       1,  1.0,  2.0),
+    ("pessary",       1,  0.5,  0.5),
+    ("caffeine",      5,  0.3,  1.5),   # bladder irritant — more detrusor relevant
+    ("qmax",          2,  1.5,  1.0),
+    ("leukocytes",    4,  0.5,  1.0),
+    ("protein",       4,  0.5,  1.0),
+    ("blood",         4,  0.5,  1.0),
+    ("cystocele",     4,  2.0,  0.5),   # anatomical — strong SUI association
+    ("rectocele",     4,  0.5,  0.5),
+    ("uvd",           3,  2.0,  0.5),   # urethro-vesical descent — key SUI marker
+    ("pfc",           5,  1.5,  1.0),
 ]
 
 
@@ -133,16 +134,16 @@ FEATURES = [
 def vectorise(case):
     return [
         (case[key] / max_val if case[key] is not None else None)
-        for key, max_val, _ in FEATURES
+        for key, max_val, *_ in FEATURES
     ]
 
 
 # ── Weighted Euclidean distance between two patient vectors ────────────────────
-# Lower = more similar. Skips features where either patient has no value.
-# Divides by number of compared features so missing data doesn't inflate distance.
-def distance(query_vec, case_vec):
+# weight_col: 2 = SUI weights, 3 = detrusor weights
+def distance(query_vec, case_vec, weight_col):
     sq, dims = 0.0, 0
-    for i, (_, _, w) in enumerate(FEATURES):
+    for i, feat in enumerate(FEATURES):
+        w = feat[weight_col]
         q, c = query_vec[i], case_vec[i]
         if q is None or c is None:
             continue
@@ -152,10 +153,10 @@ def distance(query_vec, case_vec):
 
 
 # ── Find K nearest neighbours ──────────────────────────────────────────────────
-# Compares the query against every case, sorts by distance, returns the top K.
-def find_knn(query, cases, k):
+# weight_col: 2 = SUI weights, 3 = detrusor weights
+def find_knn(query, cases, k, weight_col):
     q_vec = vectorise(query)
-    scored = [(distance(q_vec, vectorise(case)), case) for case in cases]
+    scored = [(distance(q_vec, vectorise(case), weight_col), case) for case in cases]
     scored.sort(key=lambda x: x[0])
     return scored[:k]
 
@@ -243,70 +244,63 @@ if submitted:
     st.session_state["last_qmax_label"] = qmax
     st.session_state["has_results"]     = True
 
-    results = find_knn(query, cases, k)
-    st.session_state["last_results"] = results
+    # Run KNN twice — once per diagnosis type, each with its own weights
+    results_sui = find_knn(query, cases, k, weight_col=2)
+    results_det = find_knn(query, cases, k, weight_col=3)
+    st.session_state["last_results"] = results_sui
 
     st.subheader(f"Top {k} Most Similar Cases")
 
-    # Quick summary of diagnoses across all matched cases
-    sui_labels = [r[1]["diag_sui"] for r in results if r[1]["diag_sui"]]
-    det_labels = [r[1]["diag_det"] for r in results if r[1]["diag_det"]]
+    def render_results(results):
+        for rank, (dist, case) in enumerate(results, 1):
+            similarity = max(0, round((1 - dist) * 100, 1))
+            src_tag = " *(added)*" if case["diag_source"] != "original" else ""
 
-    if sui_labels or det_labels:
-        sc1, sc2 = st.columns(2)
-        with sc1:
-            st.markdown("**SUI findings across matched cases**")
-            for label in sui_labels:
-                st.markdown(f"- {label}")
-        with sc2:
-            st.markdown("**Detrusor findings across matched cases**")
-            for label in det_labels:
-                st.markdown(f"- {label}")
-        st.divider()
+            with st.expander(
+                f"#{rank}  •  Case {case['id']}{src_tag}  •  Age {int(case['age'])}  •  Similarity {similarity}%",
+                expanded=(rank <= 3),
+            ):
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.markdown("**Urodynamic Diagnoses**")
+                    if case["diag_sui"]:
+                        st.info(f"**SUI:** {case['diag_sui']}")
+                    if case["diag_det"]:
+                        st.info(f"**Detrusor:** {case['diag_det']}")
+                    if case["void"]:
+                        st.info(f"**Voiding:** {case['void']}")
+                    if case["diag_source"] != "original":
+                        st.caption(f"Source: Urodynamics  ·  Added {case['date_added']}")
 
-    # Individual result cards — top 3 expanded by default
-    for rank, (dist, case) in enumerate(results, 1):
-        similarity = max(0, round((1 - dist) * 100, 1))  # distance → rough similarity %
-        src_tag = " *(added)*" if case["diag_source"] != "original" else ""
+                with c2:
+                    st.markdown("**Case Profile**")
+                    flags = []
+                    if case["sui"]:       flags.append("Hx SUI")
+                    if case["urgency"]:   flags.append("Urgency")
+                    if case["frequency"]: flags.append("Frequency")
+                    if case["nocturia"]:  flags.append(f"Nocturia ×{int(case['nocturia'])}")
+                    if case["leaking"]:   flags.append("Leaking")
+                    if case["pessary"]:   flags.append("Pessary")
+                    st.write("Symptoms: " + (", ".join(flags) if flags else "None recorded"))
+                    qmax_str = {0.0: "Low", 1.0: "Normal", 2.0: "High"}.get(case["qmax"], "—")
+                    st.write(f"Qmax: **{qmax_str}**  |  "
+                             f"Cystocele: **{int(case['cystocele'])}**  |  "
+                             f"Rectocele: **{int(case['rectocele'])}**  |  "
+                             f"UVD: **{int(case['uvd'])}**")
 
-        with st.expander(
-            f"#{rank}  •  Case {case['id']}{src_tag}  •  Age {int(case['age'])}  •  Similarity {similarity}%",
-            expanded=(rank <= 3),
-        ):
-            c1, c2 = st.columns(2)
-            with c1:
-                st.markdown("**Urodynamic Diagnoses**")
-                if case["diag_sui"]:
-                    st.info(f"**SUI:** {case['diag_sui']}")
-                if case["diag_det"]:
-                    st.info(f"**Detrusor:** {case['diag_det']}")
-                if case["void"]:
-                    st.info(f"**Voiding:** {case['void']}")
-                if case["diag_source"] != "original":
-                    src_map = {"cbr_inference": "CBR inference", "urodynamics": "Urodynamics"}
-                    st.caption(f"Source: {src_map.get(case['diag_source'], case['diag_source'])}  ·  Added {case['date_added']}")
+                if case["hx"]:
+                    st.markdown("**Clinical history**")
+                    st.caption(case["hx"])
 
-            with c2:
-                st.markdown("**Case Profile**")
-                flags = []
-                if case["sui"]:       flags.append("Hx SUI")
-                if case["urgency"]:   flags.append("Urgency")
-                if case["frequency"]: flags.append("Frequency")
-                if case["nocturia"]:  flags.append(f"Nocturia ×{int(case['nocturia'])}")
-                if case["leaking"]:   flags.append("Leaking")
-                if case["pessary"]:   flags.append("Pessary")
-                st.write("Symptoms: " + (", ".join(flags) if flags else "None recorded"))
-                qmax_str = {0.0: "Low", 1.0: "Normal", 2.0: "High"}.get(case["qmax"], "—")
-                st.write(f"Qmax: **{qmax_str}**  |  "
-                         f"Cystocele: **{int(case['cystocele'])}**  |  "
-                         f"Rectocele: **{int(case['rectocele'])}**  |  "
-                         f"UVD: **{int(case['uvd'])}**")
+                st.markdown(f"<small>Distance score: {dist:.4f}</small>", unsafe_allow_html=True)
 
-            if case["hx"]:
-                st.markdown("**Clinical history**")
-                st.caption(case["hx"])
-
-            st.markdown(f"<small>Distance score: {dist:.4f}</small>", unsafe_allow_html=True)
+    tab_sui, tab_det = st.tabs(["🔵 Urodynamic SUI Diagnosis", "🟠 Detrusor Diagnosis"])
+    with tab_sui:
+        st.caption("Ranked using SUI-optimised weights — emphasises hx SUI, cystocele, UVD.")
+        render_results(results_sui)
+    with tab_det:
+        st.caption("Ranked using detrusor-optimised weights — emphasises urgency, frequency, nocturia, leaking.")
+        render_results(results_det)
 
 
 # ── Add case to dataset ────────────────────────────────────────────────────────
