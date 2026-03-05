@@ -161,7 +161,9 @@ def find_knn(query, cases, k):
 
 
 # ── Page header ────────────────────────────────────────────────────────────────
-st.image(Path(__file__).parent / "logo_ucc.jpg", width=200)
+logo_path = Path(__file__).parent / "logo_ucc.jpg"
+if logo_path.exists():
+    st.image(str(logo_path), width=200)
 st.title("🏥 Urogynaecology CBR Tool")
 st.markdown("Enter patient details below to find the most similar cases from the database.")
 
