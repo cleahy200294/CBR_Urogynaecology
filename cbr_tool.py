@@ -1,18 +1,23 @@
+# Urogynaecology CBR Tool
+# Finds the K most similar past patients to a new query using weighted KNN.
+# Data lives in CBR_database_working.csv — new urodynamic cases can be appended via the UI.
+
 import csv
 import datetime
 import math
 import streamlit as st
 from pathlib import Path
 
+# Path to the working database (same folder as this script)
 CSV_PATH = Path(__file__).parent / "CBR_database_working.csv"
 
+# Column names used in the CSV — every row must have these fields
 CSV_FIELDS = [
     "id", "hx", "age", "sui", "urgency", "frequency", "nocturia",
     "leaking", "pessary", "caffeine", "qmax", "leukocytes", "protein",
     "blood", "oe", "cystocele", "rectocele", "uvd", "pfc", "sensations",
     "diag_sui", "diag_det", "void", "diag_source", "date_added",
 ]
-
 
 # ── Page config ────────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -39,7 +44,9 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-# ── Data loading ────────────────────────────────────────────────────────────────
+# ── Load cases from CSV ────────────────────────────────────────────────────────
+# Not cached so newly saved cases appear immediately without restarting.
+# sf() safely converts a CSV cell to float; returns None if blank (skipped in distance calc).
 def load_cases():
     if not CSV_PATH.exists():
         st.error("Database file not found: CBR_database_working.csv")
@@ -68,7 +75,7 @@ def load_cases():
                 "leaking":     sf("leaking"),
                 "pessary":     sf("pessary"),
                 "caffeine":    sf("caffeine"),
-                "qmax":        sf("qmax", None),
+                "qmax":        sf("qmax", None),    # None = not recorded, skipped in comparison
                 "leukocytes":  sf("leukocytes"),
                 "protein":     sf("protein"),
                 "blood":       sf("blood"),
@@ -76,7 +83,7 @@ def load_cases():
                 "cystocele":   sf("cystocele"),
                 "rectocele":   sf("rectocele"),
                 "uvd":         sf("uvd"),
-                "pfc":         sf("pfc", None),
+                "pfc":         sf("pfc", None),     # None = not recorded, skipped in comparison
                 "sensations":  row.get("sensations", ""),
                 "diag_sui":    row.get("diag_sui", ""),
                 "diag_det":    row.get("diag_det", ""),
@@ -87,6 +94,7 @@ def load_cases():
     return cases
 
 
+# ── Append a new case to the CSV ───────────────────────────────────────────────
 def append_case_to_csv(new_case: dict):
     write_header = not CSV_PATH.exists()
     with open(CSV_PATH, "a", newline="", encoding="utf-8") as f:
@@ -96,32 +104,42 @@ def append_case_to_csv(new_case: dict):
         writer.writerow(new_case)
 
 
-# ── Feature vector & distance ───────────────────────────────────────────────────
+# ── Feature table ──────────────────────────────────────────────────────────────
+# (feature, max_value, weight)
+# max_value normalises each feature to 0–1 so age doesn't dominate over binary symptoms.
+# weight controls how much a difference in that feature affects the similarity score.
+# Increase a weight to make that feature more influential; decrease to reduce it.
 FEATURES = [
-    ("age",        100, 1.0),
-    ("sui",          1, 1.5),
-    ("urgency",      1, 1.5),
-    ("frequency",    1, 1.0),
-    ("nocturia",    10, 1.0),
-    ("leaking",      1, 1.0),
-    ("pessary",      1, 0.5),
-    ("caffeine",     5, 0.5),
-    ("qmax",         2, 1.5),
-    ("leukocytes",   4, 1.0),
-    ("protein",      4, 1.0),
-    ("blood",        4, 1.0),
-    ("cystocele",    4, 1.5),
-    ("rectocele",    4, 1.5),
-    ("uvd",          3, 1.0),
-    ("pfc",          5, 1.0),
+    ("age",        100,  1.0),
+    ("sui",          1,  1.5),
+    ("urgency",      1,  1.5),
+    ("frequency",    1,  1.0),
+    ("nocturia",    10,  1.0),
+    ("leaking",      1,  1.0),
+    ("pessary",      1,  0.5),
+    ("caffeine",     5,  0.5),
+    ("qmax",         2,  1.5),
+    ("leukocytes",   4,  1.0),
+    ("protein",      4,  1.0),
+    ("blood",        4,  1.0),
+    ("cystocele",    4,  1.5),
+    ("rectocele",    4,  1.5),
+    ("uvd",          3,  1.0),
+    ("pfc",          5,  1.0),
 ]
 
+
+# ── Convert a case dict to a normalised number list ────────────────────────────
 def vectorise(case):
     return [
         (case[key] / max_val if case[key] is not None else None)
         for key, max_val, _ in FEATURES
     ]
 
+
+# ── Weighted Euclidean distance between two patient vectors ────────────────────
+# Lower = more similar. Skips features where either patient has no value.
+# Divides by number of compared features so missing data doesn't inflate distance.
 def distance(query_vec, case_vec):
     sq, dims = 0.0, 0
     for i, (_, _, w) in enumerate(FEATURES):
@@ -132,6 +150,9 @@ def distance(query_vec, case_vec):
         dims += 1
     return math.sqrt(sq / dims) if dims else float("inf")
 
+
+# ── Find K nearest neighbours ──────────────────────────────────────────────────
+# Compares the query against every case, sorts by distance, returns the top K.
 def find_knn(query, cases, k):
     q_vec = vectorise(query)
     scored = [(distance(q_vec, vectorise(case)), case) for case in cases]
@@ -139,7 +160,7 @@ def find_knn(query, cases, k):
     return scored[:k]
 
 
-# ── UI ──────────────────────────────────────────────────────────────────────────
+# ── Page header ────────────────────────────────────────────────────────────────
 st.image(Path(__file__).parent / "logo_ucc.jpg", width=200)
 st.title("🏥 Urogynaecology CBR Tool")
 st.markdown("Enter patient details below to find the most similar cases from the database.")
@@ -154,13 +175,15 @@ st.caption(caption)
 
 st.divider()
 
-# ── Input form ──────────────────────────────────────────────────────────────────
+
+# ── Input form ─────────────────────────────────────────────────────────────────
+# Grouped in a form so the search only runs on submit, not on every widget change.
 with st.form("cbr_form"):
     col1, col2, col3 = st.columns(3)
 
     with col1:
         st.subheader("Patient & Symptoms")
-        age = st.number_input("Age", min_value=10, max_value=100, value=55, step=1)
+        age       = st.number_input("Age", min_value=10, max_value=100, value=55, step=1)
         st.markdown("**Symptoms** (tick all that apply)")
         sui       = st.checkbox("Hx of SUI (leaks with cough / sneeze / exercise)")
         urgency   = st.checkbox("Urgency")
@@ -172,8 +195,8 @@ with st.form("cbr_form"):
 
     with col2:
         st.subheader("Uroflow & Urine")
-        qmax = st.selectbox("Qmax", options=["Normal", "Low", "High"], index=0)
-        qmax_val = {"Normal": 1.0, "Low": 0.0, "High": 2.0}[qmax]
+        qmax     = st.selectbox("Qmax", options=["Normal", "Low", "High"], index=0)
+        qmax_val = {"Normal": 1.0, "Low": 0.0, "High": 2.0}[qmax]  # text → number
         st.markdown("**Urine Dipstick**")
         leukocytes = st.select_slider("Leukocytes", options=[0, 1, 2, 3, 4], value=0)
         protein    = st.select_slider("Protein",    options=[0, 1, 2, 3, 4], value=0)
@@ -187,12 +210,13 @@ with st.form("cbr_form"):
         pfc       = st.select_slider("Pelvic Floor Contraction (PFC, Oxford)", options=[0, 1, 2, 3, 4, 5], value=3)
 
     st.divider()
-    k = st.slider("Number of nearest cases (K)", min_value=1, max_value=15, value=5)
+    k         = st.slider("Number of nearest cases (K)", min_value=1, max_value=15, value=5)
     submitted = st.form_submit_button("🔍 Find Similar Cases", use_container_width=True, type="primary")
 
 
-# ── Results ──────────────────────────────────────────────────────────────────────
+# ── Results ────────────────────────────────────────────────────────────────────
 if submitted:
+    # Build query dict — checkboxes become 1.0/0.0 to match database format
     query = {
         "age":        float(age),
         "sui":        1.0 if sui else 0.0,
@@ -211,6 +235,8 @@ if submitted:
         "uvd":        float(uvd),
         "pfc":        float(pfc),
     }
+
+    # Store in session_state so the "Add case" section below can access it after rerender
     st.session_state["last_query"]      = query
     st.session_state["last_qmax_label"] = qmax
     st.session_state["has_results"]     = True
@@ -220,6 +246,7 @@ if submitted:
 
     st.subheader(f"Top {k} Most Similar Cases")
 
+    # Quick summary of diagnoses across all matched cases
     sui_labels = [r[1]["diag_sui"] for r in results if r[1]["diag_sui"]]
     det_labels = [r[1]["diag_det"] for r in results if r[1]["diag_det"]]
 
@@ -235,8 +262,9 @@ if submitted:
                 st.markdown(f"- {label}")
         st.divider()
 
+    # Individual result cards — top 3 expanded by default
     for rank, (dist, case) in enumerate(results, 1):
-        similarity = max(0, round((1 - dist) * 100, 1))
+        similarity = max(0, round((1 - dist) * 100, 1))  # distance → rough similarity %
         src_tag = " *(added)*" if case["diag_source"] != "original" else ""
 
         with st.expander(
@@ -279,7 +307,9 @@ if submitted:
             st.markdown(f"<small>Distance score: {dist:.4f}</small>", unsafe_allow_html=True)
 
 
-# ── Add case to dataset ───────────────────────────────────────────────────────
+# ── Add case to dataset ────────────────────────────────────────────────────────
+# Only real urodynamic results can be saved — not CBR-inferred diagnoses.
+# Input features are taken from the last search; diagnoses are typed in here.
 if st.session_state.get("has_results"):
     st.divider()
     with st.expander("➕ Add this case to the dataset (urodynamics only)", expanded=False):
@@ -288,37 +318,21 @@ if st.session_state.get("has_results"):
             "Enter the results from the urodynamics study below."
         )
 
-        # ── Case metadata ─────────────────────────────────────────────────────
         m1, m2 = st.columns(2)
         with m1:
-            case_id = st.text_input(
-                "Case ID",
-                value=f"ADD-{datetime.date.today().isoformat()}",
-            )
+            case_id = st.text_input("Case ID", value=f"ADD-{datetime.date.today().isoformat()}")
         with m2:
             hx = st.text_input("Clinical notes / history (optional)")
 
         st.markdown("---")
-        st.caption("Enter the results from the urodynamics study.")
+        st.caption("Enter the confirmed results from the urodynamics study.")
         d1, d2, d3 = st.columns(3)
         with d1:
-            diag_sui = st.text_input(
-                "SUI diagnosis",
-                placeholder="e.g. Urodynamic SUI, No SUI",
-                key="uro_sui",
-            )
+            diag_sui = st.text_input("SUI diagnosis", placeholder="e.g. Urodynamic SUI, No SUI", key="uro_sui")
         with d2:
-            diag_det = st.text_input(
-                "Detrusor diagnosis",
-                placeholder="e.g. Overactive detrusor, Stable",
-                key="uro_det",
-            )
+            diag_det = st.text_input("Detrusor diagnosis", placeholder="e.g. Overactive detrusor, Stable", key="uro_det")
         with d3:
-            void_dx = st.text_input(
-                "Voiding diagnosis",
-                placeholder="e.g. Normal void, Incomplete emptying",
-                key="uro_void",
-            )
+            void_dx  = st.text_input("Voiding diagnosis", placeholder="e.g. Normal void, Incomplete emptying", key="uro_void")
 
         st.markdown("")
         if st.button("💾 Save case to dataset", type="primary", key="save_case_btn"):
