@@ -13,7 +13,7 @@ CSV_PATH = Path(__file__).parent / "CBR_database_working.csv"
 
 # Column names used in the CSV — every row must have these fields
 CSV_FIELDS = [
-    "id", "hx", "age", "sui", "urgency", "frequency", "nocturia",
+    "id", "hx", "age", "bmi", "deliveries", "sui", "urgency", "frequency", "nocturia",
     "leaking", "pessary", "caffeine", "qmax", "leukocytes", "protein",
     "blood", "oe", "cystocele", "rectocele", "uvd", "pfc", "sensations",
     "diag_sui", "diag_det", "void", "diag_source", "date_added",
@@ -68,6 +68,8 @@ def load_cases():
                 "id":          row.get("id", ""),
                 "hx":          row.get("hx", ""),
                 "age":         sf("age"),
+                "bmi":         sf("bmi", None),
+                "deliveries":  sf("deliveries", None),
                 "sui":         sf("sui"),
                 "urgency":     sf("urgency"),
                 "frequency":   sf("frequency"),
@@ -112,6 +114,8 @@ def append_case_to_csv(new_case: dict):
 FEATURES = [
     # feature       max   SUI   DET
     ("age",         100,  1.0,  1.0),
+    ("bmi",          55,  1.5,  1.0),   # obesity increases intra-abdominal pressure — more SUI relevant
+    ("deliveries",   10,  1.5,  0.8),   # parity — associated with pelvic floor damage and SUI
     ("sui",           1,  2.5,  0.5),   # strong SUI predictor
     ("urgency",       1,  0.5,  2.5),   # strong detrusor predictor
     ("frequency",     1,  0.5,  2.0),
@@ -186,7 +190,9 @@ with st.form("cbr_form"):
 
     with col1:
         st.subheader("Patient & Symptoms")
-        age       = st.number_input("Age", min_value=10, max_value=100, value=55, step=1)
+        age        = st.number_input("Age", min_value=10, max_value=100, value=55, step=1)
+        bmi        = st.number_input("BMI", min_value=15.0, max_value=55.0, value=25.0, step=0.1)
+        deliveries = st.number_input("Total deliveries (SVD + instrumental + LSCS)", min_value=0, max_value=10, value=0, step=1)
         st.markdown("**Symptoms** (tick all that apply)")
         sui       = st.checkbox("Hx of SUI (leaks with cough / sneeze / exercise)")
         urgency   = st.checkbox("Urgency")
@@ -222,6 +228,8 @@ if submitted:
     # Build query dict — checkboxes become 1.0/0.0 to match database format
     query = {
         "age":        float(age),
+        "bmi":        float(bmi),
+        "deliveries": float(deliveries),
         "sui":        1.0 if sui else 0.0,
         "urgency":    1.0 if urgency else 0.0,
         "frequency":  1.0 if frequency else 0.0,
@@ -337,6 +345,8 @@ if st.session_state.get("has_results"):
                 "id":          case_id.strip() or f"ADD-{datetime.date.today().isoformat()}",
                 "hx":          hx.strip(),
                 "age":         q.get("age", ""),
+                "bmi":         q.get("bmi", ""),
+                "deliveries":  q.get("deliveries", ""),
                 "sui":         q.get("sui", ""),
                 "urgency":     q.get("urgency", ""),
                 "frequency":   q.get("frequency", ""),
