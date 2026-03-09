@@ -13,7 +13,7 @@ CSV_PATH = Path(__file__).parent / "CBR_database_working.csv"
 
 # Column names used in the CSV — every row must have these fields
 CSV_FIELDS = [
-    "id", "hx", "age", "bmi", "deliveries", "sui", "urgency", "frequency", "nocturia",
+    "id", "hx", "age", "bmi", "svd", "kiwi", "forceps", "lscs", "deliveries", "sui", "urgency", "frequency", "nocturia",
     "leaking", "pessary", "caffeine", "qmax", "leukocytes", "protein",
     "blood", "oe", "cystocele", "rectocele", "uvd", "pfc", "sensations",
     "diag_sui", "diag_det", "void", "diag_source", "date_added",
@@ -69,7 +69,16 @@ def load_cases():
                 "hx":          row.get("hx", ""),
                 "age":         sf("age"),
                 "bmi":         sf("bmi", None),
-                "deliveries":  sf("deliveries", None),
+                "svd":         sf("svd", None),
+                "kiwi":        sf("kiwi", None),
+                "forceps":     sf("forceps", None),
+                "lscs":        sf("lscs", None),
+                # total deliveries computed from components; falls back to stored value if components missing
+                "deliveries":  (
+                    (sf("svd", None) or 0) + (sf("kiwi", None) or 0) +
+                    (sf("forceps", None) or 0) + (sf("lscs", None) or 0)
+                ) if any(row.get(k, "") != "" for k in ["svd","kiwi","forceps","lscs"])
+                  else sf("deliveries", None),
                 "sui":         sf("sui"),
                 "urgency":     sf("urgency"),
                 "frequency":   sf("frequency"),
@@ -191,8 +200,15 @@ with st.form("cbr_form"):
     with col1:
         st.subheader("Patient & Symptoms")
         age        = st.number_input("Age", min_value=10, max_value=100, value=55, step=1)
-        bmi        = st.number_input("BMI", min_value=15.0, max_value=55.0, value=25.0, step=0.1)
-        deliveries = st.number_input("Total deliveries (SVD + instrumental + LSCS)", min_value=0, max_value=10, value=0, step=1)
+        bmi     = st.number_input("BMI", min_value=15.0, max_value=55.0, value=25.0, step=0.1)
+        st.markdown("**Deliveries**")
+        d1, d2 = st.columns(2)
+        with d1:
+            svd     = st.number_input("SVD",     min_value=0, max_value=10, value=0, step=1)
+            forceps = st.number_input("Forceps", min_value=0, max_value=10, value=0, step=1)
+        with d2:
+            kiwi    = st.number_input("Kiwi",    min_value=0, max_value=10, value=0, step=1)
+            lscs    = st.number_input("LSCS",    min_value=0, max_value=10, value=0, step=1)
         st.markdown("**Symptoms** (tick all that apply)")
         sui       = st.checkbox("Hx of SUI (leaks with cough / sneeze / exercise)")
         urgency   = st.checkbox("Urgency")
@@ -229,7 +245,11 @@ if submitted:
     query = {
         "age":        float(age),
         "bmi":        float(bmi),
-        "deliveries": float(deliveries),
+        "svd":        float(svd),
+        "kiwi":       float(kiwi),
+        "forceps":    float(forceps),
+        "lscs":       float(lscs),
+        "deliveries": float(svd + kiwi + forceps + lscs),
         "sui":        1.0 if sui else 0.0,
         "urgency":    1.0 if urgency else 0.0,
         "frequency":  1.0 if frequency else 0.0,
@@ -346,6 +366,10 @@ if st.session_state.get("has_results"):
                 "hx":          hx.strip(),
                 "age":         q.get("age", ""),
                 "bmi":         q.get("bmi", ""),
+                "svd":         q.get("svd", ""),
+                "kiwi":        q.get("kiwi", ""),
+                "forceps":     q.get("forceps", ""),
+                "lscs":        q.get("lscs", ""),
                 "deliveries":  q.get("deliveries", ""),
                 "sui":         q.get("sui", ""),
                 "urgency":     q.get("urgency", ""),
