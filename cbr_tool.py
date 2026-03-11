@@ -124,7 +124,10 @@ FEATURES = [
     # feature       max   SUI   DET
     ("age",         100,  1.0,  1.0),
     ("bmi",          55,  1.5,  1.0),   # obesity increases intra-abdominal pressure — more SUI relevant
-    ("deliveries",   10,  1.5,  0.8),   # parity — associated with pelvic floor damage and SUI
+    ("svd",          10,  1.2,  0.7),   # spontaneous vaginal delivery — pelvic floor stress
+    ("kiwi",         10,  1.8,  0.7),   # kiwi/ventouse — significant pelvic floor trauma
+    ("forceps",      10,  2.0,  0.7),   # forceps — highest pelvic floor trauma, strong SUI association
+    ("lscs",         10,  0.5,  0.5),   # caesarean — protective of pelvic floor, lower SUI weight
     ("sui",           1,  2.5,  0.5),   # strong SUI predictor
     ("urgency",       1,  0.5,  2.5),   # strong detrusor predictor
     ("frequency",     1,  0.5,  2.0),
